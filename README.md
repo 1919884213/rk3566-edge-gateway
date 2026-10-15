@@ -2,14 +2,14 @@
 
 # rk3566-edge-gateway
 
-**基于 epoll Reactor 的 Linux 边缘协议网关 —— 下行 CAN/Modbus 采集 + 上行 MQTT + 板上 LVGL 面板**
+**基于 epoll Reactor 的 Linux 边缘协议网关 —— 下行多协议采集（CAN / 串口 / TCP）+ 上行 MQTT + 板上 LVGL 面板**
 
-`~5700 行 C` · `epoll ET + EPOLLONESHOT` · `固定 worker 线程池` · `SocketCAN` · `Modbus RTU` · `自研 MQTT 3.1.1` · `Linux 字符设备驱动` · `LVGL 9.6` · `CMake`
+`~5700 行 C` · `epoll ET + EPOLLONESHOT` · `固定 worker 线程池` · `下行多协议` · `SocketCAN` · `串口轮询` · `自研 MQTT 3.1.1` · `Linux 字符设备驱动` · `LVGL 9.6` · `CMake`
 
 [![OS](https://img.shields.io/badge/OS-Linux-informational?style=flat-square)](#架构)
 [![Lang](https://img.shields.io/badge/Lang-C-blue?style=flat-square)](#目录结构)
 [![IO](https://img.shields.io/badge/IO-epoll%20ET%20%2B%20ONESHOT-orange?style=flat-square)](#架构)
-[![Downlink](https://img.shields.io/badge/downlink-SocketCAN%20%7C%20Modbus%20RTU-critical?style=flat-square)](#下行一socketcan)
+[![Downlink](https://img.shields.io/badge/downlink-SocketCAN%20%7C%20Serial-critical?style=flat-square)](#三种下行--一种上行)
 [![Uplink](https://img.shields.io/badge/uplink-MQTT%203.1.1-yellow?style=flat-square)](#上行mqtt)
 [![Kernel](https://img.shields.io/badge/kernel-chardev%20%2B%20kfifo-blueviolet?style=flat-square)](#内核缓存通道-gwcache)
 [![GUI](https://img.shields.io/badge/GUI-LVGL%209.6%20%2B%20fbdev-yellowgreen?style=flat-square)](#lvgl-面板)
@@ -28,7 +28,7 @@
   ┌──────────────┐  CAN     ┌──────────────────────────────────────┐
   │ CAN 节点      │─────────▶│ Downlink/can.c  (SocketCAN)          │
   └──────────────┘          │        │                             │
-  ┌──────────────┐  Modbus  │        ▼                             │   MQTT  ┌──────────┐
+  ┌──────────────┐  串口     │        ▼                             │   MQTT  ┌──────────┐
   │ 从站设备      │─────────▶│  Gateway 核心：设备表 + 分组订阅 + 帧路由│─────────▶│ 云平台    │
   └──────────────┘  RTU     │        │                             │         └──────────┘
   ┌──────────────┐  TCP     │        ├──▶ gwcache.ko (kfifo) ──────┼──▶ LVGL 面板
@@ -36,7 +36,7 @@
   └──────────────┘          └──────────────────────────────────────┘
 ```
 
-- **下行两路 + 一路 TCP 接入**：CAN 走 SocketCAN（**作为事件源进同一个 epoll 实例**），Modbus RTU 走串口轮询线程，TCP 设备直接接入。
+- **下行多协议 + 一路 TCP 接入**：CAN 走 SocketCAN（**作为事件源进同一个 epoll 实例**），串口侧走轮询线程，TCP 设备直接接入；三者在上层收敛成同一条数据帧。
 - **三种来源在上层收敛**：全部转成统一帧 `DATA <source> <key> <value>`，走**同一条出口** —— 内核旁路缓存 + 分组下发 + MQTT 上报。
 - **旁路可观测**：每一条分发帧同时写进自研字符设备 `/dev/gwcache`（kfifo 环形缓冲）。网关进程被 `kill -9` 后，最后一批数据帧依然读得到。
 - **服务端核心零第三方依赖**：包括 MQTT 客户端都是自己实现的（只做 CONNECT / PUBLISH QoS0 / PINGREQ / DISCONNECT 四种报文）。
