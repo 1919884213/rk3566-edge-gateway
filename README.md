@@ -46,12 +46,54 @@
 | 项目 | 状态 | 证据 |
 |---|---|---|
 | 交叉编译（aarch64） | ✅ 通过 | ARM GNU Toolchain 13.3 `aarch64-none-linux-gnu-gcc`，5 个目标 `-Wall -Wextra` **零警告**；`readelf -d` 仅依赖 `libc.so.6` |
-| 纯逻辑自检 | ✅ 12/12 | `gwlogic_test`：Modbus CRC16 + MQTT 变长整数边界值，实测输出见下方 |
-| 网关核心功能自检 | ⏳ 需在 Linux 上跑 | `gwtest`（注册/订阅/上报/分发/退订/离线全链路）已编过，未在本次环境执行 |
-| 内核模块加载 + 端到端 | ⏳ 待板子复跑 | `scripts/gwcache_accept.sh` / `gwcache_integ.sh` 已适配网关协议，读数待跑 |
+| 宿主机编译（x86_64） | ✅ 通过 | Ubuntu 24.04 / gcc 13.3.0 / CMake 3.28.3，5 个目标 clean build **零警告** |
+| 纯逻辑自检 | ✅ **12/12** | `gwlogic_test`：Modbus CRC16 + MQTT 变长整数边界值，实测输出见下方 |
+| 网关核心全链路自检 | ✅ **10/10** | `gwtest`：注册/查重/订阅/上报/分发/退订/`SUB *`/统计/离线广播，实测输出见下方 |
+| 端到端活体冒烟 | ✅ **30/30** | `scripts/smoke_test.sh`：3 个模拟设备 × 10 轮上报，订阅端**收齐 30 帧**（数字精确对上） |
+| 四路通道缺失的降级 | ✅ 通过 | 无 `can0`、无 `/dev/ttyS3`、无 `/dev/gwcache`、无 MQTT broker 时**全部优雅降级**，服务照常分发 |
+| 内核模块加载 + 端到端脚本 | ⏳ 待板子复跑 | `scripts/gwcache_accept.sh` / `gwcache_integ.sh` 已适配网关协议，读数待跑 |
 | 真机 CAN / Modbus / MQTT 联调 | ⏳ 待做 | 需要 CAN 收发器、Modbus 从站、MQTT broker |
 
 > 上表是**刻意保留**的：这份 README 只写跑过的读数。真机跑完把数字填进来即可。
+
+### 降级路径实测（`scripts/smoke_test.sh` 启动日志）
+
+四路通道全缺的情况下网关照常工作 —— 这是现场部署最常见的第一天状态：
+
+```
+[WARN] /dev/gwcache 不可用(No such file or directory)，内核缓存通道关闭，网关继续运行
+[INFO] 未配置 MQTT broker，上行通道关闭（本地分发照常）
+[WARN] CAN can0 打开失败(No such device)，CAN 通道降级关闭
+[WARN] Modbus 串口 /dev/ttyS3 打开失败(Permission denied)，Modbus 通道降级关闭
+[INFO] edge gateway listening on port 8080
+[INFO] device 127.0.0.1:36774 connected -> worker 0
+...
+```
+
+### `gwtest` 实测输出（10/10）
+
+```
+--- 设备注册（含 ID 查重）---
+  [PASS] 重名设备 ID 被拒绝
+--- 分组订阅 ---
+  [PASS] 订阅确认回执
+--- 设备上报：走 TCP 上行 -> 分组分发 ---
+  [PASS] A 的上报以 tcp:<设备ID> 为源分发到 B
+--- 下行源收敛：CAN / Modbus 走同一条出口 ---
+  [PASS] CAN 帧按 can 分组分发
+  [PASS] Modbus 帧按 modbus 分组分发
+--- 退订后不再收到 ---
+  [PASS] 退订后不再收到该分组数据
+--- SUB * 订阅全部 ---
+  [PASS] SUB * 收到跨分组数据
+--- 统计 ---
+  下行帧 6 / 分发 6
+  [PASS] 统计计数在增长
+--- 设备离线广播 ---
+  [PASS] 同分组收到离线通知
+
+===== 结果: ALL PASS（失败 0 项）=====
+```
 
 ### `gwlogic_test` 实测输出
 
@@ -317,10 +359,11 @@ printf 'DATA can:0x100 speed 1122334455667788\nDATA modbus:1 flow_rate 1234\n' >
 ## 测试与验收
 
 ```bash
-./build/gwlogic_test                       # 纯逻辑：CRC16 + MQTT 变长整数（12 项）
-./build/gwtest                             # 核心：注册→订阅→上报→分发→退订→离线
+./build/gwlogic_test                       # 纯逻辑：CRC16 + MQTT 变长整数（12 项，ALL PASS）
+./build/gwtest                             # 核心：注册→订阅→上报→分发→退订→离线（10 项，ALL PASS）
+bash scripts/smoke_test.sh                 # 活体端到端：3 设备 × 10 轮，订阅端应收齐 30 帧
 sudo bash scripts/gwcache_accept.sh        # 字符设备功能：12 项
-sudo bash scripts/gwcache_integ.sh         # 端到端集成
+sudo bash scripts/gwcache_integ.sh         # 端到端集成（含内核模块）
 ```
 
 ## 设计权衡与已知限制
